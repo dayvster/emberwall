@@ -1,0 +1,4 @@
+/emberwall
+/emberwall-*
+*.png
+!docs/*.png
