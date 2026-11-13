@@ -33,6 +33,8 @@ emberwall -logo random -logo-pos corner   # small logo bottom-right (center, lef
 emberwall -logo arch -logo-size large      # tiny, small, medium (default), large/big or huge
 emberwall -logo arch -logo-color '#1793d1' # logo in an exact colour instead of the palette's
 emberwall -logo random -logo-color original   # each distro in its own brand colour
+emberwall -svg ~/my-logo.svg       # your own SVG as the logo
+emberwall -svg ~/my-logo.svg -logo-pos corner -logo-size large  # same logo flags apply
 emberwall -set                     # also set the result as your wallpaper
 emberwall -list                    # all styles, palettes and logos
 ```
@@ -68,6 +70,11 @@ ember, ice, rose, toxic, violet, blood, gold, teal, mono, sunset, aurora. Or any
 archlinux, artixlinux, debian, elementary, endeavouros, fedora, gentoo, kalilinux, linuxmint,
 manjaro, nixos, opensuse, popos, rockylinux, ubuntu, voidlinux, zorin. Short names like `arch`,
 `mint`, `pop` or `void` work too.
+
+`-svg FILE` uses your own SVG instead. Its filled shapes are combined into one silhouette and
+drawn with the same `-logo-pos`, `-logo-size` and `-logo-color` flags as a bundled logo, so it
+follows the palette (or `-logo-color original` gives it a neutral light grey). Paths, polygons,
+rectangles, circles and ellipses are supported, including group and element transforms.
 
 The shapes come from [Simple Icons](https://simpleicons.org) (CC0). The logos are trademarks of
 their projects; see [logos/NOTICE.md](logos/NOTICE.md).

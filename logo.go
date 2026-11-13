@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"embed"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"math"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"sort"
@@ -62,6 +67,7 @@ func (l Logo) originalColor() RGB {
 type Logo struct {
 	Name, Title string
 	d           string
+	shapes      []shape // set for custom SVGs: shapes already parsed and transformed
 }
 
 var svgRe = regexp.MustCompile(`<title>([^<]*)</title><path d="([^"]+)"`)
@@ -100,6 +106,362 @@ func findLogo(name string) (Logo, bool) {
 		}
 	}
 	return Logo{}, false
+}
+
+// loadCustomLogo reads an SVG file given with -svg. Its filled shapes become one silhouette, so
+// the rest of the logo pipeline (-logo-pos, -logo-size, -logo-color) works exactly as for the
+// bundled logos.
+func loadCustomLogo(path string) (Logo, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Logo{}, fmt.Errorf("reading -svg: %w", err)
+	}
+	shapes, title, err := parseSVG(b)
+	if err != nil {
+		return Logo{}, fmt.Errorf("-svg %s: %w", path, err)
+	}
+	if len(shapes) == 0 {
+		return Logo{}, fmt.Errorf("-svg %s: no filled shapes found (need path, polygon, rect, circle or ellipse)", path)
+	}
+	name := strings.Trim(slugRe.ReplaceAllString(strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), "-"), "-")
+	if name == "" {
+		name = "custom"
+	}
+	if title == "" {
+		title = name + " (custom SVG)"
+	}
+	return Logo{Name: name, Title: title, shapes: shapes}, nil
+}
+
+var slugRe = regexp.MustCompile(`[^A-Za-z0-9_-]+`)
+
+// svgFrame is one open element: the accumulated transform, whether it sits inside a
+// non-rendered container such as <defs> or <clipPath>, and the inherited fill and fill-rule.
+type svgFrame struct {
+	m        affine
+	hidden   bool
+	fillNone bool
+	evenOdd  bool
+}
+
+// parseSVG extracts the filled outlines from an SVG document. Path data, the basic shapes and
+// group/path transforms are supported; fills, strokes and colours are ignored because the logo
+// is recoloured like a bundled one.
+func parseSVG(data []byte) ([]shape, string, error) {
+	dec := xml.NewDecoder(bytes.NewReader(data))
+	frames := []svgFrame{{m: identity}}
+	var shapes []shape
+	var title string
+	for {
+		tok, err := dec.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, "", err
+		}
+		switch t := tok.(type) {
+		case xml.StartElement:
+			name := strings.ToLower(t.Name.Local)
+			parent := frames[len(frames)-1]
+			if name == "title" { // grab a display name without pushing a frame
+				var s string
+				if err := dec.DecodeElement(&s, &t); err == nil && !parent.hidden && title == "" {
+					title = strings.TrimSpace(s)
+				}
+				continue
+			}
+			m := parent.m
+			if tr := attr(t, "transform"); tr != "" {
+				local, err := parseTransform(tr)
+				if err != nil {
+					return nil, "", fmt.Errorf("%s transform: %w", t.Name.Local, err)
+				}
+				m = m.mul(local)
+			}
+			hidden := parent.hidden || svgHiddenContainers[name] || svgHiddenElement(t)
+			fillNone := parent.fillNone
+			if f := svgProp(t, "fill"); f != "" && !strings.EqualFold(f, "inherit") {
+				fillNone = strings.EqualFold(f, "none") || strings.EqualFold(f, "transparent")
+			}
+			evenOdd := parent.evenOdd
+			if r := svgProp(t, "fill-rule"); r != "" && !strings.EqualFold(r, "inherit") {
+				evenOdd = strings.EqualFold(r, "evenodd")
+			}
+			frames = append(frames, svgFrame{m: m, hidden: hidden, fillNone: fillNone, evenOdd: evenOdd})
+			if hidden || fillNone {
+				continue
+			}
+			polys, err := svgShape(t, name)
+			if err != nil {
+				return nil, "", fmt.Errorf("%s: %w", t.Name.Local, err)
+			}
+			sh := shape{evenOdd: evenOdd}
+			for _, poly := range polys {
+				if len(poly) < 3 {
+					continue
+				}
+				for i := range poly {
+					poly[i] = m.apply(poly[i])
+				}
+				sh.polys = append(sh.polys, poly)
+			}
+			if len(sh.polys) > 0 {
+				shapes = append(shapes, sh)
+			}
+		case xml.EndElement:
+			if len(frames) > 1 {
+				frames = frames[:len(frames)-1]
+			}
+		}
+	}
+	return shapes, title, nil
+}
+
+var svgHiddenContainers = map[string]bool{
+	"defs": true, "clippath": true, "mask": true, "symbol": true, "marker": true,
+	"pattern": true, "metadata": true, "style": true, "desc": true, "filter": true,
+	"lineargradient": true, "radialgradient": true,
+}
+
+func svgHiddenElement(t xml.StartElement) bool {
+	return strings.EqualFold(svgProp(t, "display"), "none") ||
+		strings.EqualFold(svgProp(t, "visibility"), "hidden")
+}
+
+// svgProp reads a presentation property, preferring the style attribute (style="fill:none")
+// over the plain attribute (fill="none"), as CSS does. Editors like Inkscape use the style form.
+func svgProp(t xml.StartElement, name string) string {
+	for _, decl := range strings.Split(attr(t, "style"), ";") {
+		k, v, ok := strings.Cut(decl, ":")
+		if ok && strings.EqualFold(strings.TrimSpace(k), name) {
+			v = strings.TrimSpace(v)
+			v = strings.TrimSpace(strings.TrimSuffix(v, "!important"))
+			return v
+		}
+	}
+	return strings.TrimSpace(attr(t, name))
+}
+
+// svgShape turns one supported SVG element into polygons in its own coordinate system.
+func svgShape(t xml.StartElement, name string) ([][]pt, error) {
+	switch name {
+	case "path":
+		d := attr(t, "d")
+		if d == "" {
+			return nil, nil
+		}
+		return parsePath(d)
+	case "polygon", "polyline":
+		pts, err := parsePoints(attr(t, "points"))
+		if err != nil {
+			return nil, err
+		}
+		if len(pts) < 3 {
+			return nil, nil
+		}
+		return [][]pt{pts}, nil
+	case "rect":
+		x, y := numAttr(t, "x", 0), numAttr(t, "y", 0)
+		w, h := numAttr(t, "width", 0), numAttr(t, "height", 0)
+		if w <= 0 || h <= 0 {
+			return nil, nil
+		}
+		rx, ry := numAttr(t, "rx", 0), numAttr(t, "ry", 0)
+		if rx == 0 {
+			rx = ry
+		}
+		if ry == 0 {
+			ry = rx
+		}
+		return [][]pt{roundedRect(x, y, w, h, rx, ry)}, nil
+	case "circle":
+		r := numAttr(t, "r", 0)
+		if r <= 0 {
+			return nil, nil
+		}
+		return [][]pt{ellipsePoly(numAttr(t, "cx", 0), numAttr(t, "cy", 0), r, r)}, nil
+	case "ellipse":
+		rx, ry := numAttr(t, "rx", 0), numAttr(t, "ry", 0)
+		if rx <= 0 || ry <= 0 {
+			return nil, nil
+		}
+		return [][]pt{ellipsePoly(numAttr(t, "cx", 0), numAttr(t, "cy", 0), rx, ry)}, nil
+	}
+	return nil, nil
+}
+
+func roundedRect(x, y, w, h, rx, ry float64) []pt {
+	if rx <= 0 || ry <= 0 {
+		return []pt{{x, y}, {x + w, y}, {x + w, y + h}, {x, y + h}}
+	}
+	rx, ry = math.Min(rx, w/2), math.Min(ry, h/2)
+	arc := func(out []pt, cx, cy, a0, a1 float64) []pt {
+		const steps = 8
+		for i := 1; i <= steps; i++ {
+			a := a0 + (a1-a0)*float64(i)/steps
+			out = append(out, pt{cx + rx*math.Cos(a), cy + ry*math.Sin(a)})
+		}
+		return out
+	}
+	out := []pt{{x + rx, y}, {x + w - rx, y}}
+	out = arc(out, x+w-rx, y+ry, -math.Pi/2, 0)
+	out = append(out, pt{x + w, y + h - ry})
+	out = arc(out, x+w-rx, y+h-ry, 0, math.Pi/2)
+	out = append(out, pt{x + rx, y + h})
+	out = arc(out, x+rx, y+h-ry, math.Pi/2, math.Pi)
+	out = append(out, pt{x, y + ry})
+	return arc(out, x+rx, y+ry, math.Pi, 3*math.Pi/2)
+}
+
+func ellipsePoly(cx, cy, rx, ry float64) []pt {
+	const steps = 64
+	out := make([]pt, 0, steps)
+	for i := 0; i < steps; i++ {
+		a := 2 * math.Pi * float64(i) / steps
+		out = append(out, pt{cx + rx*math.Cos(a), cy + ry*math.Sin(a)})
+	}
+	return out
+}
+
+func parsePoints(s string) ([]pt, error) {
+	nums, err := parseNums(s)
+	if err != nil {
+		return nil, err
+	}
+	if len(nums)%2 != 0 {
+		return nil, fmt.Errorf("odd number of points coordinates")
+	}
+	out := make([]pt, 0, len(nums)/2)
+	for i := 0; i < len(nums); i += 2 {
+		out = append(out, pt{nums[i], nums[i+1]})
+	}
+	return out, nil
+}
+
+// ---------- transforms ----------
+
+type affine struct{ a, b, c, d, e, f float64 }
+
+var identity = affine{1, 0, 0, 1, 0, 0}
+
+func (m affine) apply(p pt) pt {
+	return pt{m.a*p.X + m.c*p.Y + m.e, m.b*p.X + m.d*p.Y + m.f}
+}
+
+// mul returns m*n: n is applied to a point first, then m.
+func (m affine) mul(n affine) affine {
+	return affine{
+		a: m.a*n.a + m.c*n.b,
+		b: m.b*n.a + m.d*n.b,
+		c: m.a*n.c + m.c*n.d,
+		d: m.b*n.c + m.d*n.d,
+		e: m.a*n.e + m.c*n.f + m.e,
+		f: m.b*n.e + m.d*n.f + m.f,
+	}
+}
+
+var transformRe = regexp.MustCompile(`(?i)(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)`)
+
+func parseTransform(s string) (affine, error) {
+	m := identity
+	for _, g := range transformRe.FindAllStringSubmatch(s, -1) {
+		nums, err := parseNums(g[2])
+		if err != nil {
+			return m, err
+		}
+		var t affine
+		switch strings.ToLower(g[1]) {
+		case "matrix":
+			if len(nums) != 6 {
+				return m, fmt.Errorf("matrix needs 6 numbers")
+			}
+			t = affine{nums[0], nums[1], nums[2], nums[3], nums[4], nums[5]}
+		case "translate":
+			if len(nums) < 1 || len(nums) > 2 {
+				return m, fmt.Errorf("translate needs 1 or 2 numbers")
+			}
+			ty := 0.0
+			if len(nums) == 2 {
+				ty = nums[1]
+			}
+			t = affine{1, 0, 0, 1, nums[0], ty}
+		case "scale":
+			if len(nums) < 1 || len(nums) > 2 {
+				return m, fmt.Errorf("scale needs 1 or 2 numbers")
+			}
+			sy := nums[0]
+			if len(nums) == 2 {
+				sy = nums[1]
+			}
+			t = affine{nums[0], 0, 0, sy, 0, 0}
+		case "rotate":
+			if len(nums) != 1 && len(nums) != 3 {
+				return m, fmt.Errorf("rotate needs 1 or 3 numbers")
+			}
+			a := nums[0] * math.Pi / 180
+			cx, cy := 0.0, 0.0
+			if len(nums) == 3 {
+				cx, cy = nums[1], nums[2]
+			}
+			rot := affine{math.Cos(a), math.Sin(a), -math.Sin(a), math.Cos(a), 0, 0}
+			t = affine{1, 0, 0, 1, cx, cy}.mul(rot).mul(affine{1, 0, 0, 1, -cx, -cy})
+		case "skewx":
+			if len(nums) != 1 {
+				return m, fmt.Errorf("skewX needs 1 number")
+			}
+			t = affine{1, 0, math.Tan(nums[0] * math.Pi / 180), 1, 0, 0}
+		case "skewy":
+			if len(nums) != 1 {
+				return m, fmt.Errorf("skewY needs 1 number")
+			}
+			t = affine{1, math.Tan(nums[0] * math.Pi / 180), 0, 1, 0, 0}
+		}
+		m = m.mul(t)
+	}
+	return m, nil
+}
+
+func parseNums(s string) ([]float64, error) {
+	p := &pathLexer{s: s}
+	var out []float64
+	for {
+		p.skip()
+		if p.done() {
+			return out, nil
+		}
+		before := p.i
+		out = append(out, p.number())
+		if p.err != nil {
+			return nil, p.err
+		}
+		if p.i == before {
+			return nil, fmt.Errorf("bad number list %q", s)
+		}
+	}
+}
+
+func attr(t xml.StartElement, name string) string {
+	for _, a := range t.Attr {
+		if strings.EqualFold(a.Name.Local, name) {
+			return a.Value
+		}
+	}
+	return ""
+}
+
+// numAttr reads a plain SVG number, tolerating a px suffix (and ignoring other units).
+func numAttr(t xml.StartElement, name string, def float64) float64 {
+	s := strings.TrimSpace(attr(t, name))
+	if s == "" {
+		return def
+	}
+	p := &pathLexer{s: strings.TrimSuffix(s, "px")}
+	v := p.number()
+	if p.err != nil {
+		return def
+	}
+	return v
 }
 
 // ---------- SVG path → polygons ----------
@@ -347,30 +709,45 @@ func arc(out *[]pt, p0, p1 pt, rx, ry, rotDeg float64, large, sweep bool) {
 
 // ---------- rasterising ----------
 
-// rasterize fills polys (nonzero winding, like SVG's default) into a w*h coverage mask, after mapping
-// path coordinates through x*scale+ox, y*scale+oy. Anti-aliased: 5 sub-rows per pixel, exact horizontally.
-func rasterize(polys [][]pt, w, h int, scale, ox, oy float64) []float32 {
+// shape is one filled SVG element: its outlines and its fill rule (nonzero unless evenOdd).
+type shape struct {
+	polys   [][]pt
+	evenOdd bool
+}
+
+// rasterize fills shapes into a w*h coverage mask, after mapping path coordinates through
+// x*scale+ox, y*scale+oy. Each shape is filled with its own fill rule and the results are
+// unioned, as SVG paints them. Anti-aliased: 5 sub-rows per pixel, exact horizontally.
+func rasterize(shapes []shape, w, h int, scale, ox, oy float64) []float32 {
 	type edge struct {
 		x0, y0, x1, y1 float64
-		dir            int
+		dir, shape     int
 	}
 	var edges []edge
 	minY, maxY := math.Inf(1), math.Inf(-1)
-	for _, poly := range polys {
-		for i := range poly {
-			a, b := poly[i], poly[(i+1)%len(poly)]
-			ax, ay := a.X*scale+ox, a.Y*scale+oy
-			bx, by := b.X*scale+ox, b.Y*scale+oy
-			if ay == by {
-				continue
+	for si, sh := range shapes {
+		for _, poly := range sh.polys {
+			for i := range poly {
+				a, b := poly[i], poly[(i+1)%len(poly)]
+				ax, ay := a.X*scale+ox, a.Y*scale+oy
+				bx, by := b.X*scale+ox, b.Y*scale+oy
+				if ay == by {
+					continue
+				}
+				dir := 1
+				if ay > by {
+					ax, ay, bx, by, dir = bx, by, ax, ay, -1
+				}
+				edges = append(edges, edge{ax, ay, bx, by, dir, si})
+				minY, maxY = math.Min(minY, ay), math.Max(maxY, by)
 			}
-			dir := 1
-			if ay > by {
-				ax, ay, bx, by, dir = bx, by, ax, ay, -1
-			}
-			edges = append(edges, edge{ax, ay, bx, by, dir})
-			minY, maxY = math.Min(minY, ay), math.Max(maxY, by)
 		}
+	}
+	inside := func(si, wind int) bool {
+		if shapes[si].evenOdd {
+			return wind%2 != 0
+		}
+		return wind != 0
 	}
 	mask := make([]float32, w*h)
 	if len(edges) == 0 {
@@ -379,10 +756,11 @@ func rasterize(polys [][]pt, w, h int, scale, ox, oy float64) []float32 {
 	const sub = 5
 	y0, y1 := max(0, int(minY)), min(h-1, int(maxY)+1)
 	type cross struct {
-		x   float64
-		dir int
+		x          float64
+		dir, shape int
 	}
 	var xs []cross
+	wind := make([]int, len(shapes)) // per-shape winding number along the current sub-row
 	for y := y0; y <= y1; y++ {
 		row := mask[y*w : (y+1)*w]
 		for s := 0; s < sub; s++ {
@@ -392,13 +770,23 @@ func rasterize(polys [][]pt, w, h int, scale, ox, oy float64) []float32 {
 				if sy < e.y0 || sy >= e.y1 {
 					continue
 				}
-				xs = append(xs, cross{e.x0 + (sy-e.y0)/(e.y1-e.y0)*(e.x1-e.x0), e.dir})
+				xs = append(xs, cross{e.x0 + (sy-e.y0)/(e.y1-e.y0)*(e.x1-e.x0), e.dir, e.shape})
 			}
 			sort.Slice(xs, func(i, j int) bool { return xs[i].x < xs[j].x })
-			wind := 0
+			clear(wind)
+			covering := 0 // how many shapes the current interval is inside
 			for i := 0; i+1 < len(xs); i++ {
-				wind += xs[i].dir
-				if wind != 0 {
+				si := xs[i].shape
+				was := inside(si, wind[si])
+				wind[si] += xs[i].dir
+				if now := inside(si, wind[si]); now != was {
+					if now {
+						covering++
+					} else {
+						covering--
+					}
+				}
+				if covering > 0 {
 					span(row, xs[i].x, xs[i+1].x, 1.0/sub)
 				}
 			}
@@ -577,15 +965,26 @@ func (lc LogoChoice) pick(r interface{ Intn(int) int }) (l Logo, col *RGB, ok bo
 // before Palette.Apply). A non-nil col is used as is (draw after Apply, so the palette leaves it alone).
 // sizeScale multiplies the position's default size (1 = medium).
 func (c *Canvas) DrawLogo(l Logo, pos string, sizeScale float64, col *RGB) error {
-	polys, err := parsePath(l.d)
-	if err != nil {
-		return fmt.Errorf("logo %s: %w", l.Name, err)
+	shapes := l.shapes
+	if len(shapes) == 0 {
+		polys, err := parsePath(l.d)
+		if err != nil {
+			return fmt.Errorf("logo %s: %w", l.Name, err)
+		}
+		if len(polys) > 0 {
+			shapes = []shape{{polys: polys}}
+		}
+	}
+	if len(shapes) == 0 {
+		return fmt.Errorf("logo %s: no shapes", l.Name)
 	}
 	minX, minY, maxX, maxY := math.Inf(1), math.Inf(1), math.Inf(-1), math.Inf(-1)
-	for _, p := range polys {
-		for _, q := range p {
-			minX, maxX = math.Min(minX, q.X), math.Max(maxX, q.X)
-			minY, maxY = math.Min(minY, q.Y), math.Max(maxY, q.Y)
+	for _, sh := range shapes {
+		for _, p := range sh.polys {
+			for _, q := range p {
+				minX, maxX = math.Min(minX, q.X), math.Max(maxX, q.X)
+				minY, maxY = math.Min(minY, q.Y), math.Max(maxY, q.Y)
+			}
 		}
 	}
 	W, H := float64(c.W), float64(c.H)
@@ -605,7 +1004,7 @@ func (c *Canvas) DrawLogo(l Logo, pos string, sizeScale float64, col *RGB) error
 	scale := size / math.Max(maxX-minX, maxY-minY)
 	ox := cx - (minX+maxX)/2*scale
 	oy := cy - (minY+maxY)/2*scale
-	mask := rasterize(polys, c.W, c.H, scale, ox, oy)
+	mask := rasterize(shapes, c.W, c.H, scale, ox, oy)
 	halo := blur(mask, c.W, c.H, max(2, int(size*0.07)))
 	glow := blur(mask, c.W, c.H, max(1, int(size*0.025)))
 	top, bot := minY*scale+oy, maxY*scale+oy
