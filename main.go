@@ -7,6 +7,7 @@
 //	emberwall -palette ice,rose      other colours (or -palette random)
 //	emberwall -color '#3fa9f5'       your own colour (1-3 hex colours, comma-separated)
 //	emberwall -logo arch             a distro logo on top of any style
+//	emberwall -svg ./mylogo.svg      your own SVG on top, with the same -logo-pos/-size/-color flags
 //	emberwall -set                   also set the (last) result as your wallpaper
 //	emberwall -list                  list the styles, palettes and logos
 //
@@ -78,6 +79,7 @@ func main() {
 	colors := flag.String("colors", "", "several accent colours blended across the image (2-8 hex), e.g. Dracula: '#bd93f9,#ff79c6,#8be9fd,#50fa7b'")
 	list := flag.Bool("list", false, "list styles, palettes and logos, then exit")
 	logoName := flag.String("logo", "", "put a distro logo on top: name, comma-separated list, or random (see -list)")
+	svgPath := flag.String("svg", "", "use a custom SVG file as the logo; works with -logo-pos, -logo-size and -logo-color")
 	logoPos := flag.String("logo-pos", "center", "where the logo goes: center, left, right or corner")
 	logoSize := flag.String("logo-size", "medium", "logo size: tiny, small, medium, large (or big) or huge")
 	logoColor := flag.String("logo-color", "", "logo in exactly this colour, e.g. '#1793d1', or original = the distro's own colour (default: follows the palette)")
@@ -85,7 +87,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "emberwall: random procedural wallpapers\n\nusage: emberwall [flags]")
 		flag.PrintDefaults()
 		printLists(os.Stderr)
-		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)\n  emberwall -style synthwave -logo arch  (a distro logo on top; -logo-pos center|left|right|corner)\n  emberwall -logo arch -logo-size small   (tiny, small, medium, large or huge)\n  emberwall -logo arch -logo-color '#1793d1'  (logo in an exact colour, whatever the palette)\n  emberwall -logo random -logo-color original  (each distro in its own brand colour)")
+		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)\n  emberwall -style synthwave -logo arch  (a distro logo on top; -logo-pos center|left|right|corner)\n  emberwall -logo arch -logo-size small   (tiny, small, medium, large or huge)\n  emberwall -logo arch -logo-color '#1793d1'  (logo in an exact colour, whatever the palette)\n  emberwall -logo random -logo-color original  (each distro in its own brand colour)\n  emberwall -svg ~/my-logo.svg -logo-pos corner -logo-size large  (your own SVG on top)")
 	}
 	flag.Parse()
 
@@ -110,6 +112,13 @@ func main() {
 	logo, err := parseLogoChoice(*logoName, *logoPos, *logoSize, *logoColor)
 	if err != nil {
 		fail(err)
+	}
+	if *svgPath != "" {
+		l, err := loadCustomLogo(*svgPath)
+		if err != nil {
+			fail(err)
+		}
+		logo.Pool = append(logo.Pool, l)
 	}
 
 	if err := os.MkdirAll(*out, 0o755); err != nil {
@@ -194,7 +203,7 @@ func printLists(w *os.File) {
 	for _, p := range palettes {
 		fmt.Fprintf(w, "  %-10s %s\n", p.Name, p.Desc)
 	}
-	fmt.Fprintln(w, "\nlogos (-logo NAME, -logo-pos center|left|right|corner, -logo-size tiny|small|medium|large|huge):")
+	fmt.Fprintln(w, "\nlogos (-logo NAME or -svg FILE, -logo-pos center|left|right|corner, -logo-size tiny|small|medium|large|huge):")
 	for _, l := range logos() {
 		fmt.Fprintf(w, "  %-12s %s\n", l.Name, l.Title)
 	}

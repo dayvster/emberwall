@@ -20,11 +20,18 @@ func Hex(s string) RGB {
 	fmt.Sscanf(strings.TrimPrefix(s, "#"), "%02x%02x%02x", &r, &g, &b)
 	return RGB{float64(r) / 255, float64(g) / 255, float64(b) / 255}
 }
-func (a RGB) Scale(k float64) RGB { return RGB{a.R * k, a.G * k, a.B * k} }
-func (a RGB) Add(b RGB) RGB       { return RGB{a.R + b.R, a.G + b.G, a.B + b.B} }
+
+// The float64(x*y) conversions in these helpers are deliberate: they stop the compiler from
+// fusing a multiply and an add into one FMA instruction. arm64 (Apple Silicon) fuses by
+// default and rounds differently, so without them the same seed could give slightly
+// different pixels on different machines.
+func (a RGB) Scale(k float64) RGB {
+	return RGB{float64(a.R * k), float64(a.G * k), float64(a.B * k)}
+}
+func (a RGB) Add(b RGB) RGB { return RGB{a.R + b.R, a.G + b.G, a.B + b.B} }
 func Mix(a, b RGB, t float64) RGB {
 	t = clamp01(t)
-	return RGB{a.R + (b.R-a.R)*t, a.G + (b.G-a.G)*t, a.B + (b.B-a.B)*t}
+	return RGB{a.R + float64((b.R-a.R)*t), a.G + float64((b.G-a.G)*t), a.B + float64((b.B-a.B)*t)}
 }
 
 // Ember palette
@@ -43,14 +50,14 @@ var (
 
 func clamp01(t float64) float64     { return math.Max(0, math.Min(1, t)) }
 func clamp(t, a, b float64) float64 { return math.Max(a, math.Min(b, t)) }
-func lerp(a, b, t float64) float64  { return a + (b-a)*t }
+func lerp(a, b, t float64) float64  { return a + float64((b-a)*t) } // no FMA, see Scale
 
 // smooth is smoothstep; e0 > e1 gives a falling edge.
 func smooth(e0, e1, t float64) float64 {
 	t = clamp01((t - e0) / (e1 - e0))
-	return t * t * (3 - 2*t)
+	return float64(t*t) * (3 - float64(2*t))
 }
-func rr(r *rand.Rand, a, b float64) float64 { return a + (b-a)*r.Float64() }
+func rr(r *rand.Rand, a, b float64) float64 { return a + float64((b-a)*r.Float64()) }
 
 // hash01 is a stateless per-pixel random number in [0,1).
 func hash01(x, y int, seed uint64) float64 {

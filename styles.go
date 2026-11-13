@@ -8,7 +8,7 @@ import (
 
 // vignette darkens toward the edges, centred on (cu, cv) in u/v units.
 func vignette(u, v, cu, cv, A, k float64) float64 {
-	return 1 - k*math.Pow(clamp01(math.Hypot((u-cu)/A, v-cv)*1.25), 2.2)
+	return 1 - float64(k*math.Pow(clamp01(math.Hypot((u-cu)/A, v-cv)*1.25), 2.2)) // no FMA
 }
 
 // ---------------------------------------------------------------- topo
