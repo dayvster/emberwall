@@ -50,13 +50,17 @@ func fractal(c *Canvas, r *rand.Rand) string {
 		if mandel {
 			zx, zy, ax, ay = 0, 0, px, py
 		}
+		// The float64() conversions stop the compiler fusing a*b+c into one FMA instruction.
+		// arm64 (and amd64 built with GOAMD64=v3) fuse by default, which rounds differently,
+		// and this iteration is chaotic, so one bit of difference would change pixels and
+		// break "same seed = same image" across machines.
 		for i := 0; i < maxIt; i++ {
-			x2, y2 := zx*zx, zy*zy
+			x2, y2 := float64(zx*zx), float64(zy*zy)
 			if x2+y2 > 256 {
 				nu := float64(i) + 1 - math.Log2(math.Log(x2+y2)/2/math.Log(2))
 				return nu / float64(maxIt)
 			}
-			zy = 2*zx*zy + ay
+			zy = float64(2*zx*zy) + ay
 			zx = x2 - y2 + ax
 		}
 		return -1
@@ -70,7 +74,8 @@ func fractal(c *Canvas, r *rand.Rand) string {
 				for sx := 0; sx < 2; sx++ {
 					su := ((float64(x)+0.25+0.5*float64(sx))/Hf - A/2) * scale
 					sv := ((float64(y)+0.25+0.5*float64(sy))/Hf - 0.5) * scale
-					px, py := ox+su*cs-sv*sn, oy+su*sn+sv*cs
+					px := ox + float64(su*cs) - float64(sv*sn) // no FMA, see escape()
+					py := oy + float64(su*sn) + float64(sv*cs)
 					vals[(y*W+x)*4+sy*2+sx] = float32(escape(px, py))
 				}
 			}
