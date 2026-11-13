@@ -6,8 +6,9 @@
 //	emberwall -style topo -seed 42   regenerate one you liked (name shows style + seed)
 //	emberwall -palette ice,rose      other colours (or -palette random)
 //	emberwall -color '#3fa9f5'       your own colour (1-3 hex colours, comma-separated)
+//	emberwall -logo arch             a distro logo on top of any style
 //	emberwall -set                   also set the (last) result as your wallpaper
-//	emberwall -list                  list the styles
+//	emberwall -list                  list the styles, palettes and logos
 //
 // Standard library only, so `go build` works the same on macOS and Linux.
 package main
@@ -75,12 +76,15 @@ func main() {
 	palette := flag.String("palette", "ember", "palette name, comma-separated list, or random (see -list)")
 	color := flag.String("color", "", "custom colours instead of a palette: 1-3 hex, e.g. '#3fa9f5' or '#ff4f7b,#ffd23f'")
 	colors := flag.String("colors", "", "several accent colours blended across the image (2-8 hex), e.g. Dracula: '#bd93f9,#ff79c6,#8be9fd,#50fa7b'")
-	list := flag.Bool("list", false, "list styles and palettes, then exit")
+	list := flag.Bool("list", false, "list styles, palettes and logos, then exit")
+	logoName := flag.String("logo", "", "put a distro logo on top: name, comma-separated list, or random (see -list)")
+	logoPos := flag.String("logo-pos", "center", "where the logo goes: center, left, right or corner")
+	logoColor := flag.String("logo-color", "", "logo in exactly this colour, e.g. '#1793d1', or original = the distro's own colour (default: follows the palette)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "emberwall: random procedural wallpapers\n\nusage: emberwall [flags]")
 		flag.PrintDefaults()
 		printLists(os.Stderr)
-		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)")
+		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)\n  emberwall -style synthwave -logo arch  (a distro logo on top; -logo-pos center|left|right|corner)\n  emberwall -logo arch -logo-color '#1793d1'  (logo in an exact colour, whatever the palette)\n  emberwall -logo random -logo-color original  (each distro in its own brand colour)")
 	}
 	flag.Parse()
 
@@ -94,42 +98,17 @@ func main() {
 		fail(err)
 	}
 
-	pool := styles
-	if *style != "random" && *style != "" {
-		pool = nil
-		for _, name := range strings.Split(*style, ",") {
-			s, ok := findStyle(strings.TrimSpace(name))
-			if !ok {
-				fail(fmt.Errorf("unknown style %q (try -list)", name))
-			}
-			pool = append(pool, s)
-		}
+	pool, err := parseStyles(*style)
+	if err != nil {
+		fail(err)
 	}
-
-	var pals []Palette
-	switch {
-	case *colors != "":
-		p, err := multiPalette(*colors)
-		if err != nil {
-			fail(err)
-		}
-		pals = []Palette{p}
-	case *color != "":
-		p, err := customPalette(*color)
-		if err != nil {
-			fail(err)
-		}
-		pals = []Palette{p}
-	case *palette == "random":
-		pals = palettes
-	default:
-		for _, name := range strings.Split(*palette, ",") {
-			p, ok := findPalette(strings.TrimSpace(name))
-			if !ok {
-				fail(fmt.Errorf("unknown palette %q (try -list)", name))
-			}
-			pals = append(pals, p)
-		}
+	pals, err := parsePalettes(*palette, *color, *colors)
+	if err != nil {
+		fail(err)
+	}
+	logo, err := parseLogoChoice(*logoName, *logoPos, *logoColor)
+	if err != nil {
+		fail(err)
 	}
 
 	if err := os.MkdirAll(*out, 0o755); err != nil {
@@ -158,13 +137,28 @@ func main() {
 		if *crt && st.Name != "crt" {
 			c.CRT(rand.New(rand.NewSource(s+7)), 0.8)
 		}
+		logoTag := ""
+		l, logoCol, hasLogo := logo.pick(master)
+		if hasLogo {
+			logoTag = "-" + l.Name
+		}
+		if hasLogo && logoCol == nil { // palette-coloured: drawn in Ember, re-mapped with the rest
+			if err := c.DrawLogo(l, logo.Pos, nil); err != nil {
+				fail(err)
+			}
+		}
 		pal.Apply(c, uint64(s))
+		if hasLogo && logoCol != nil { // exact colour: drawn after the palette so it stays as given
+			if err := c.DrawLogo(l, logo.Pos, logoCol); err != nil {
+				fail(err)
+			}
+		}
 		img := c.Finish(*grain, uint64(s))
 		tag := ""
 		if pal.Name != "ember" {
 			tag = "-" + pal.Name
 		}
-		path := filepath.Join(*out, fmt.Sprintf("ember-%s%s-%d.png", st.Name, tag, s))
+		path := filepath.Join(*out, fmt.Sprintf("ember-%s%s%s-%d.png", st.Name, tag, logoTag, s))
 		if err := savePNG(path, img); err != nil {
 			fail(err)
 		}
@@ -199,6 +193,50 @@ func printLists(w *os.File) {
 	for _, p := range palettes {
 		fmt.Fprintf(w, "  %-10s %s\n", p.Name, p.Desc)
 	}
+	fmt.Fprintln(w, "\nlogos (-logo NAME, -logo-pos center|left|right|corner):")
+	for _, l := range logos() {
+		fmt.Fprintf(w, "  %-12s %s\n", l.Name, l.Title)
+	}
+}
+
+// parseStyles turns the -style flag into the styles to pick from.
+func parseStyles(spec string) ([]Style, error) {
+	if spec == "random" || spec == "" {
+		return styles, nil
+	}
+	var pool []Style
+	for _, name := range strings.Split(spec, ",") {
+		s, ok := findStyle(strings.TrimSpace(name))
+		if !ok {
+			return nil, fmt.Errorf("unknown style %q (try -list)", name)
+		}
+		pool = append(pool, s)
+	}
+	return pool, nil
+}
+
+// parsePalettes turns the -palette, -color and -colors flags into the palettes to pick from.
+// -colors wins over -color, which wins over -palette.
+func parsePalettes(names, color, colors string) ([]Palette, error) {
+	switch {
+	case colors != "":
+		p, err := multiPalette(colors)
+		return []Palette{p}, err
+	case color != "":
+		p, err := customPalette(color)
+		return []Palette{p}, err
+	case names == "random":
+		return palettes, nil
+	}
+	var pals []Palette
+	for _, name := range strings.Split(names, ",") {
+		p, ok := findPalette(strings.TrimSpace(name))
+		if !ok {
+			return nil, fmt.Errorf("unknown palette %q (try -list)", name)
+		}
+		pals = append(pals, p)
+	}
+	return pals, nil
 }
 
 func findStyle(name string) (Style, bool) {
