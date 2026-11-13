@@ -30,6 +30,7 @@ emberwall -color '#3fa9f5'         # your own colour (1-3 hex colours)
 emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   # several accents blended across the image
 emberwall -logo arch               # a distro logo on top of any style
 emberwall -logo random -logo-pos corner   # small logo bottom-right (center, left, right, corner)
+emberwall -logo arch -logo-size large      # tiny, small, medium (default), large/big or huge
 emberwall -logo arch -logo-color '#1793d1' # logo in an exact colour instead of the palette's
 emberwall -logo random -logo-color original   # each distro in its own brand colour
 emberwall -set                     # also set the result as your wallpaper

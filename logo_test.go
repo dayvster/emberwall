@@ -44,17 +44,20 @@ func TestFindLogoAliases(t *testing.T) {
 }
 
 func TestParseLogoChoice(t *testing.T) {
-	if _, err := parseLogoChoice("arch", "middle", ""); err == nil {
+	if _, err := parseLogoChoice("arch", "middle", "medium", ""); err == nil {
 		t.Error("bad position accepted")
 	}
-	if _, err := parseLogoChoice("arch", "center", "blue"); err == nil {
+	if _, err := parseLogoChoice("arch", "center", "medium", "blue"); err == nil {
 		t.Error("bad colour accepted")
 	}
-	if _, err := parseLogoChoice("nope", "center", ""); err == nil {
+	if _, err := parseLogoChoice("nope", "center", "medium", ""); err == nil {
 		t.Error("unknown logo accepted")
 	}
-	lc, err := parseLogoChoice("arch,debian", "corner", "#1793d1")
-	if err != nil || len(lc.Pool) != 2 || lc.Color == nil {
+	if _, err := parseLogoChoice("arch", "center", "enormous", ""); err == nil {
+		t.Error("unknown size accepted")
+	}
+	lc, err := parseLogoChoice("arch,debian", "corner", "Big", "#1793d1")
+	if err != nil || len(lc.Pool) != 2 || lc.Color == nil || lc.Size != 1.35 {
 		t.Errorf("got %+v, %v", lc, err)
 	}
 }

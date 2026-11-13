@@ -79,12 +79,13 @@ func main() {
 	list := flag.Bool("list", false, "list styles, palettes and logos, then exit")
 	logoName := flag.String("logo", "", "put a distro logo on top: name, comma-separated list, or random (see -list)")
 	logoPos := flag.String("logo-pos", "center", "where the logo goes: center, left, right or corner")
+	logoSize := flag.String("logo-size", "medium", "logo size: tiny, small, medium, large (or big) or huge")
 	logoColor := flag.String("logo-color", "", "logo in exactly this colour, e.g. '#1793d1', or original = the distro's own colour (default: follows the palette)")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "emberwall: random procedural wallpapers\n\nusage: emberwall [flags]")
 		flag.PrintDefaults()
 		printLists(os.Stderr)
-		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)\n  emberwall -style synthwave -logo arch  (a distro logo on top; -logo-pos center|left|right|corner)\n  emberwall -logo arch -logo-color '#1793d1'  (logo in an exact colour, whatever the palette)\n  emberwall -logo random -logo-color original  (each distro in its own brand colour)")
+		fmt.Fprintln(os.Stderr, "\nexamples:\n  emberwall -n 5 -open\n  emberwall -style topo -palette ice\n  emberwall -color '#ff4f7b,#ffd23f' -n 3\n  emberwall -colors '#bd93f9,#ff79c6,#8be9fd,#50fa7b'   (several colours, e.g. Dracula)\n  emberwall -style dunes -seed 11        (re-make one: style + seed are in the file name)\n  emberwall -style synthwave -logo arch  (a distro logo on top; -logo-pos center|left|right|corner)\n  emberwall -logo arch -logo-size small   (tiny, small, medium, large or huge)\n  emberwall -logo arch -logo-color '#1793d1'  (logo in an exact colour, whatever the palette)\n  emberwall -logo random -logo-color original  (each distro in its own brand colour)")
 	}
 	flag.Parse()
 
@@ -106,7 +107,7 @@ func main() {
 	if err != nil {
 		fail(err)
 	}
-	logo, err := parseLogoChoice(*logoName, *logoPos, *logoColor)
+	logo, err := parseLogoChoice(*logoName, *logoPos, *logoSize, *logoColor)
 	if err != nil {
 		fail(err)
 	}
@@ -143,13 +144,13 @@ func main() {
 			logoTag = "-" + l.Name
 		}
 		if hasLogo && logoCol == nil { // palette-coloured: drawn in Ember, re-mapped with the rest
-			if err := c.DrawLogo(l, logo.Pos, nil); err != nil {
+			if err := c.DrawLogo(l, logo.Pos, logo.Size, nil); err != nil {
 				fail(err)
 			}
 		}
 		pal.Apply(c, uint64(s))
 		if hasLogo && logoCol != nil { // exact colour: drawn after the palette so it stays as given
-			if err := c.DrawLogo(l, logo.Pos, logoCol); err != nil {
+			if err := c.DrawLogo(l, logo.Pos, logo.Size, logoCol); err != nil {
 				fail(err)
 			}
 		}
@@ -193,7 +194,7 @@ func printLists(w *os.File) {
 	for _, p := range palettes {
 		fmt.Fprintf(w, "  %-10s %s\n", p.Name, p.Desc)
 	}
-	fmt.Fprintln(w, "\nlogos (-logo NAME, -logo-pos center|left|right|corner):")
+	fmt.Fprintln(w, "\nlogos (-logo NAME, -logo-pos center|left|right|corner, -logo-size tiny|small|medium|large|huge):")
 	for _, l := range logos() {
 		fmt.Fprintf(w, "  %-12s %s\n", l.Name, l.Title)
 	}

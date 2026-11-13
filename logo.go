@@ -474,16 +474,52 @@ func boxV(src, dst []float32, w, h, r int) {
 
 var logoPositions = []string{"center", "left", "right", "corner"}
 
+// logoSizes scale the logo relative to its default size for the chosen position.
+var logoSizes = []struct {
+	Name  string
+	Scale float64
+}{
+	{"tiny", 0.45},
+	{"small", 0.7},
+	{"medium", 1},
+	{"large", 1.35},
+	{"huge", 1.75},
+}
+
+var logoSizeAliases = map[string]string{"big": "large", "normal": "medium", "xl": "huge"}
+
+func logoSizeNames() []string {
+	names := make([]string, len(logoSizes))
+	for i, sz := range logoSizes {
+		names[i] = sz.Name
+	}
+	return names
+}
+
+func findLogoSize(name string) (float64, bool) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if a, ok := logoSizeAliases[name]; ok {
+		name = a
+	}
+	for _, sz := range logoSizes {
+		if sz.Name == name {
+			return sz.Scale, true
+		}
+	}
+	return 0, false
+}
+
 // LogoChoice is what the -logo, -logo-pos and -logo-color flags ask for.
 type LogoChoice struct {
 	Pool     []Logo // nil = no logo
 	Pos      string
-	Color    *RGB // exact colour; nil = follow the palette (or the brand colour if Original)
-	Original bool // use each distro's own brand colour
+	Size     float64 // multiplier on the position's default size
+	Color    *RGB    // exact colour; nil = follow the palette (or the brand colour if Original)
+	Original bool    // use each distro's own brand colour
 }
 
 // parseLogoChoice validates the logo flags.
-func parseLogoChoice(names, pos, color string) (LogoChoice, error) {
+func parseLogoChoice(names, pos, size, color string) (LogoChoice, error) {
 	lc := LogoChoice{Pos: pos}
 	switch names {
 	case "":
@@ -511,6 +547,11 @@ func parseLogoChoice(names, pos, color string) (LogoChoice, error) {
 	if !slices.Contains(logoPositions, pos) {
 		return lc, fmt.Errorf("unknown -logo-pos %q (use %s)", pos, strings.Join(logoPositions, ", "))
 	}
+	scale, ok := findLogoSize(size)
+	if !ok {
+		return lc, fmt.Errorf("unknown -logo-size %q (use %s)", size, strings.Join(logoSizeNames(), ", "))
+	}
+	lc.Size = scale
 	return lc, nil
 }
 
@@ -534,7 +575,8 @@ func (lc LogoChoice) pick(r interface{ Intn(int) int }) (l Logo, col *RGB, ok bo
 //
 // col nil draws in Ember colours so the palette re-maps the logo like the rest of the image (draw
 // before Palette.Apply). A non-nil col is used as is (draw after Apply, so the palette leaves it alone).
-func (c *Canvas) DrawLogo(l Logo, pos string, col *RGB) error {
+// sizeScale multiplies the position's default size (1 = medium).
+func (c *Canvas) DrawLogo(l Logo, pos string, sizeScale float64, col *RGB) error {
 	polys, err := parsePath(l.d)
 	if err != nil {
 		return fmt.Errorf("logo %s: %w", l.Name, err)
@@ -555,6 +597,9 @@ func (c *Canvas) DrawLogo(l Logo, pos string, col *RGB) error {
 		size, cx = 0.30*H, W*0.73
 	case "corner":
 		size = 0.11 * H
+	}
+	size *= sizeScale
+	if pos == "corner" { // keep the margin fixed so bigger corner logos grow inwards
 		cx, cy = W-size*0.5-0.05*H, H-size*0.5-0.05*H
 	}
 	scale := size / math.Max(maxX-minX, maxY-minY)
