@@ -6,7 +6,7 @@ import (
 	"math/rand"
 )
 
-// glyph is a 5×7 bitmap; bit (row*5+col) set = lit.
+// glyph is a 5x7 bitmap; bit (row*5+col) set = lit.
 type glyph uint64
 
 // makeGlyphs builds n code-like symbols from random strokes (no fonts needed).

@@ -8,7 +8,7 @@ import (
 )
 
 // ---------------------------------------------------------------- fractal (Julia / Mandelbrot)
-// Smooth escape-time colouring with 2×2 supersampling. Julia constants and Mandelbrot zoom
+// Smooth escape-time colouring with 2x2 supersampling. Julia constants and Mandelbrot zoom
 // targets are picked from known-good spots, then nudged a little so every seed differs.
 func fractal(c *Canvas, r *rand.Rand) string {
 	Hf := float64(c.H)
@@ -61,7 +61,7 @@ func fractal(c *Canvas, r *rand.Rand) string {
 		}
 		return -1
 	}
-	// pass 1: smooth escape value for 2×2 samples per pixel
+	// pass 1: smooth escape value for 2x2 samples per pixel
 	W, H := c.W, c.H
 	vals := make([]float32, W*H*4)
 	c.Rows(func(y int) {

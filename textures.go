@@ -35,7 +35,7 @@ func (c *Canvas) Line(x0, y0, x1, y1, w float64, col RGB) {
 }
 
 // worley returns the distances to the nearest and second-nearest jittered grid point (cell = 1),
-// checking only the 3×3 neighbouring cells, so it stays fast at any density.
+// checking only the 3x3 neighbouring cells, so it stays fast at any density.
 func worley(x, y float64, seed uint64) (f1, f2 float64) {
 	ix, iy := int(math.Floor(x)), int(math.Floor(y))
 	f1, f2 = 9, 9
@@ -143,7 +143,7 @@ func circuit(c *Canvas, r *rand.Rand) string {
 		c.Disc(sx, sy, s*0.12, 1.2, col.Scale(-b*0.85)) // hole in the pad
 		steps := 0
 		for steps < length {
-			if r.Float64() < 0.18 { // 45° turn
+			if r.Float64() < 0.18 { // 45-degree turn
 				if r.Intn(2) == 0 {
 					d = (d + 1) % 8
 				} else {

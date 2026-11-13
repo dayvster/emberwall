@@ -7,7 +7,7 @@ import (
 )
 
 // ---------------------------------------------------------------- digital (motherboard)
-// Chips with pins, parallel bus lines leaving them with 45° bends, vias, and bright data
+// Chips with pins, parallel bus lines leaving them with 45-degree bends, vias, and bright data
 // packets streaming along a few buses.
 func digital(c *Canvas, r *rand.Rand) string {
 	W, H := c.W, c.H
@@ -56,7 +56,7 @@ func digital(c *Canvas, r *rand.Rand) string {
 	var live [][]seg // buses that carry packets
 	var liveTag []float32
 	buses := 0
-	// a bus: k parallel lines leaving a chip side, straight, a 45° jog, then straight again
+	// a bus: k parallel lines leaving a chip side, straight, a 45-degree jog, then straight again
 	drawBus := func(sx, sy, dx, dy float64, k int, bright float64, carry bool) {
 		nx, ny := -dy, dx // perpendicular to the first leg
 		l1 := p * float64(4+r.Intn(14))
@@ -64,7 +64,7 @@ func digital(c *Canvas, r *rand.Rand) string {
 		if r.Intn(2) == 0 {
 			turn = -1
 		}
-		// direction after the 45° bend
+		// direction after the 45-degree bend
 		bx, by := dx+turn*nx, dy+turn*ny
 		bl := math.Hypot(bx, by)
 		bx, by = bx/bl, by/bl
